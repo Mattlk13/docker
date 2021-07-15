@@ -18,9 +18,86 @@ func TestLoadProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	rs := createSpec()
-	if _, err := LoadProfile(string(f), &rs); err != nil {
+	p, err := LoadProfile(string(f), &rs)
+	if err != nil {
 		t.Fatal(err)
 	}
+	var expectedErrno uint = 12345
+	expected := specs.LinuxSeccomp{
+		DefaultAction: "SCMP_ACT_ERRNO",
+		Syscalls: []specs.LinuxSyscall{
+			{
+				Names:  []string{"clone"},
+				Action: "SCMP_ACT_ALLOW",
+				Args: []specs.LinuxSeccompArg{{
+					Index:    0,
+					Value:    2114060288,
+					ValueTwo: 0,
+					Op:       "SCMP_CMP_MASKED_EQ",
+				}},
+			},
+			{
+
+				Names:  []string{"open"},
+				Action: "SCMP_ACT_ALLOW",
+				Args:   []specs.LinuxSeccompArg{},
+			},
+			{
+				Names:  []string{"close"},
+				Action: "SCMP_ACT_ALLOW",
+				Args:   []specs.LinuxSeccompArg{},
+			},
+			{
+				Names:    []string{"syslog"},
+				Action:   "SCMP_ACT_ERRNO",
+				ErrnoRet: &expectedErrno,
+				Args:     []specs.LinuxSeccompArg{},
+			},
+		},
+	}
+
+	assert.DeepEqual(t, expected, *p)
+}
+
+func TestLoadProfileWithDefaultErrnoRet(t *testing.T) {
+	var profile = []byte(`{
+"defaultAction": "SCMP_ACT_ERRNO",
+"defaultErrnoRet": 6
+}`)
+	rs := createSpec()
+	p, err := LoadProfile(string(profile), &rs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedErrnoRet := uint(6)
+	expected := specs.LinuxSeccomp{
+		DefaultAction:   "SCMP_ACT_ERRNO",
+		DefaultErrnoRet: &expectedErrnoRet,
+	}
+
+	assert.DeepEqual(t, expected, *p)
+}
+
+func TestLoadProfileWithListenerPath(t *testing.T) {
+	var profile = []byte(`{
+"defaultAction": "SCMP_ACT_ERRNO",
+"listenerPath": "/var/run/seccompaget.sock",
+"listenerMetadata": "opaque-metadata"
+}`)
+	rs := createSpec()
+	p, err := LoadProfile(string(profile), &rs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := specs.LinuxSeccomp{
+		DefaultAction:    "SCMP_ACT_ERRNO",
+		ListenerPath:     "/var/run/seccompaget.sock",
+		ListenerMetadata: "opaque-metadata",
+	}
+
+	assert.DeepEqual(t, expected, *p)
 }
 
 // TestLoadLegacyProfile tests loading a seccomp profile in the old format
