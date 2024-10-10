@@ -266,7 +266,7 @@ func (daemon *Daemon) restore(cfg *configStore) error {
 	}
 
 	// parallelLimit is the maximum number of parallel startup jobs that we
-	// allow (this is the limited used for all startup semaphores). The multipler
+	// allow (this is the limited used for all startup semaphores). The multiplier
 	// (128) was chosen after some fairly significant benchmarking -- don't change
 	// it unless you've tested it significantly (this value is adjusted if
 	// RLIMIT_NOFILE is small to avoid EMFILE).
@@ -712,7 +712,7 @@ func (daemon *Daemon) RestartSwarmContainers() {
 
 func (daemon *Daemon) restartSwarmContainers(ctx context.Context, cfg *configStore) {
 	// parallelLimit is the maximum number of parallel startup jobs that we
-	// allow (this is the limited used for all startup semaphores). The multipler
+	// allow (this is the limited used for all startup semaphores). The multiplier
 	// (128) was chosen after some fairly significant benchmarking -- don't change
 	// it unless you've tested it significantly (this value is adjusted if
 	// RLIMIT_NOFILE is small to avoid EMFILE).
@@ -939,7 +939,7 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 
 	// ensureDefaultAppArmorProfile does nothing if apparmor is disabled
 	if err := ensureDefaultAppArmorProfile(); err != nil {
-		log.G(ctx).Errorf(err.Error())
+		log.G(ctx).WithError(err).Error("Failed to ensure default apparmor profile is loaded")
 	}
 
 	daemonRepo := filepath.Join(cfgStore.Root, "containers")
@@ -990,7 +990,9 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 		// It is painful. Add WithBlock can prevent the edge case. And
 		// n common case, the containerd will be serving in shortly.
 		// It is not harm to add WithBlock for containerd connection.
-		grpc.WithBlock(),
+		//
+		// TODO(thaJeztah): update this list once https://github.com/containerd/containerd/pull/10250/commits/63b46881753588624b2eac986660458318581330 is in the 1.7 release.
+		grpc.WithBlock(), //nolint:staticcheck // Ignore SA1019: grpc.WithBlock is deprecated: this DialOption is not supported by NewClient. Will be supported throughout 1.x.
 
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithConnectParams(connParams),

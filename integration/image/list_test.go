@@ -251,8 +251,15 @@ func TestAPIImagesListManifests(t *testing.T) {
 		{OS: "darwin", Architecture: "arm64"},
 	}
 	specialimage.Load(ctx, t, apiClient, func(dir string) (*ocispec.Index, error) {
-		return specialimage.MultiPlatform(dir, "multiplatform:latest", testPlatforms)
+		idx, _, err := specialimage.MultiPlatform(dir, "multiplatform:latest", testPlatforms)
+		return idx, err
 	})
+
+	containerPlatform := testPlatforms[1]
+
+	cid := container.Create(ctx, t, apiClient,
+		container.WithImage("multiplatform:latest"),
+		container.WithPlatform(&containerPlatform))
 
 	t.Run("unsupported before 1.47", func(t *testing.T) {
 		// TODO: Remove when MinSupportedAPIVersion >= 1.47
@@ -297,6 +304,13 @@ func TestAPIImagesListManifests(t *testing.T) {
 				op := mfst.ImageData.Platform
 				return p.OS == op.OS && p.Architecture == op.Architecture && p.Variant == op.Variant
 			})
+		}
+
+		if mfst.ImageData.Platform.OS == containerPlatform.OS &&
+			mfst.ImageData.Platform.Architecture == containerPlatform.Architecture &&
+			mfst.ImageData.Platform.Variant == containerPlatform.Variant {
+
+			assert.Check(t, is.DeepEqual(mfst.ImageData.Containers, []string{cid}))
 		}
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/internal/testutils/netnsutils"
 	"github.com/docker/docker/libnetwork/config"
 	"github.com/docker/docker/libnetwork/driverapi"
+	"github.com/docker/docker/libnetwork/etchosts"
 	"github.com/docker/docker/libnetwork/ipams/defaultipam"
 	"github.com/docker/docker/libnetwork/ipamutils"
 	"github.com/docker/docker/libnetwork/netlabel"
@@ -319,7 +320,7 @@ func compareNwLists(a, b []*net.IPNet) bool {
 func TestAuxAddresses(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
 
-	c, err := New(OptionBoltdbWithRandomDBFile(t))
+	c, err := New(config.OptionDataDir(t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,12 +359,97 @@ func TestAuxAddresses(t *testing.T) {
 	}
 }
 
+func TestUpdateSvcRecord(t *testing.T) {
+	skip.If(t, runtime.GOOS == "windows", "bridge driver and IPv6, only works on linux")
+
+	tests := []struct {
+		name       string
+		epName     string
+		addr4      string
+		addr6      string
+		expSvcRecs []etchosts.Record
+	}{
+		{
+			name:   "v4only",
+			epName: "ep4",
+			addr4:  "172.16.0.2/24",
+			expSvcRecs: []etchosts.Record{
+				{Hosts: "id-ep4", IP: "172.16.0.2"},
+			},
+		},
+		/* TODO(robmry) - add this test when the bridge driver understands v6-only
+		{
+			name:   "v6only",
+			epName: "ep6",
+			addr6:  "fde6:045d:b2aa::2/64",
+			expSvcRecs: []etchosts.Record{
+				{Hosts: "id-ep6", IP: "fde6:45d:b2aa::2"},
+			},
+		},
+		*/
+		{
+			name:   "dual-stack",
+			epName: "ep46",
+			addr4:  "172.16.1.2/24",
+			addr6:  "fd60:8677:5a4c::2/64",
+			expSvcRecs: []etchosts.Record{
+				{Hosts: "id-ep46", IP: "172.16.1.2"},
+				{Hosts: "id-ep46", IP: "fd60:8677:5a4c::2"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			defer netnsutils.SetupTestOSContext(t)()
+			ctrlr, err := New(config.OptionDataDir(t.TempDir()))
+			assert.NilError(t, err)
+			defer ctrlr.Stop()
+
+			var ipam4, ipam6 []*IpamConf
+			var ip4, ip6 net.IP
+			if tc.addr4 != "" {
+				var net4 *net.IPNet
+				ip4, net4, err = net.ParseCIDR(tc.addr4)
+				assert.NilError(t, err)
+				ipam4 = []*IpamConf{{PreferredPool: net4.String()}}
+			}
+			if tc.addr6 != "" {
+				var net6 *net.IPNet
+				ip6, net6, err = net.ParseCIDR(tc.addr6)
+				assert.NilError(t, err)
+				ipam6 = []*IpamConf{{PreferredPool: net6.String()}}
+			}
+			n, err := ctrlr.NewNetwork("bridge", "net1", "", nil,
+				NetworkOptionEnableIPv4(tc.addr4 != ""),
+				NetworkOptionEnableIPv6(tc.addr6 != ""),
+				NetworkOptionIpam(defaultipam.DriverName, "", ipam4, ipam6, nil),
+			)
+			assert.NilError(t, err)
+			ep, err := n.CreateEndpoint(context.Background(), tc.epName,
+				CreateOptionDNSNames([]string{tc.epName, "id-" + tc.epName}),
+				CreateOptionIpam(ip4, ip6, nil, nil),
+			)
+			assert.NilError(t, err)
+
+			n.updateSvcRecord(context.Background(), ep, true)
+			recs := n.getSvcRecords(ep)
+			assert.Check(t, is.DeepEqual(recs, tc.expSvcRecs))
+
+			n.updateSvcRecord(context.Background(), ep, false)
+			recs = n.getSvcRecords(ep)
+			assert.Check(t, is.Nil(recs))
+		})
+	}
+}
+
 func TestSRVServiceQuery(t *testing.T) {
 	skip.If(t, runtime.GOOS == "windows", "test only works on linux")
 
 	defer netnsutils.SetupTestOSContext(t)()
 
-	c, err := New(OptionBoltdbWithRandomDBFile(t),
+	c, err := New(config.OptionDataDir(t.TempDir()),
 		config.OptionDefaultAddressPoolConfig(ipamutils.GetLocalScopeDefaultNetworks()))
 	if err != nil {
 		t.Fatal(err)
@@ -464,7 +550,7 @@ func TestServiceVIPReuse(t *testing.T) {
 
 	defer netnsutils.SetupTestOSContext(t)()
 
-	c, err := New(OptionBoltdbWithRandomDBFile(t),
+	c, err := New(config.OptionDataDir(t.TempDir()),
 		config.OptionDefaultAddressPoolConfig(ipamutils.GetLocalScopeDefaultNetworks()))
 	if err != nil {
 		t.Fatal(err)
@@ -585,7 +671,7 @@ func TestIpamReleaseOnNetDriverFailures(t *testing.T) {
 
 	defer netnsutils.SetupTestOSContext(t)()
 
-	c, err := New(OptionBoltdbWithRandomDBFile(t))
+	c, err := New(config.OptionDataDir(t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
 	}

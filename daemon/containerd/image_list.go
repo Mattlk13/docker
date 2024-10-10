@@ -21,7 +21,6 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	imagetypes "github.com/docker/docker/api/types/image"
 	timetypes "github.com/docker/docker/api/types/time"
-	"github.com/docker/docker/container"
 	"github.com/docker/docker/errdefs"
 	"github.com/moby/buildkit/util/attestation"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
@@ -267,7 +266,7 @@ func (i *ImageService) imageSummary(ctx context.Context, img images.Image, platf
 		} else {
 			mfstSummary.Size.Content = contentSize
 			totalSize += contentSize
-			mfstSummary.Size.Total = totalSize
+			mfstSummary.Size.Total += contentSize
 		}
 
 		isPseudo, err := img.IsPseudoImage(ctx)
@@ -322,8 +321,7 @@ func (i *ImageService) imageSummary(ctx context.Context, img images.Image, platf
 
 		chainIDs := identity.ChainIDs(dockerImage.RootFS.DiffIDs)
 
-		prevContentSize := contentSize
-		unpackedSize, contentSize, err := i.singlePlatformSize(ctx, img)
+		unpackedSize, imgContentSize, err := i.singlePlatformSize(ctx, img)
 		if err != nil {
 			logger.WithError(err).Warn("failed to determine platform specific size")
 			return nil
@@ -331,28 +329,34 @@ func (i *ImageService) imageSummary(ctx context.Context, img images.Image, platf
 
 		// If the image-specific content size calculation produces different result
 		// than the "generic" one, adjust the total size with the difference.
-		if prevContentSize != contentSize {
+		// Note: This shouldn't happen unless the implementation changes or the
+		// content is added/removed during the list operation.
+		if contentSize != imgContentSize {
 			logger.WithFields(log.Fields{
-				"prevSize":    prevContentSize,
-				"contentSize": contentSize,
-			}).Debug("content size calculation mismatch")
+				"contentSize":    contentSize,
+				"imgContentSize": imgContentSize,
+			}).Warn("content size calculation mismatch")
 
-			totalSize += contentSize - prevContentSize
+			mfstSummary.Size.Content = contentSize
+
+			// contentSize was already added to total, adjust it by the difference
+			// between the newly calculated size and the old size.
+			d := imgContentSize - contentSize
+			totalSize += d
+			mfstSummary.Size.Total += d
 		}
 
-		totalSize += unpackedSize
-		mfstSummary.Size.Total = totalSize
 		mfstSummary.ImageData.Size.Unpacked = unpackedSize
+		mfstSummary.Size.Total += unpackedSize
+		totalSize += unpackedSize
 
 		allChainsIDs = append(allChainsIDs, chainIDs...)
 
-		if opts.ContainerCount {
-			i.containers.ApplyAll(func(c *container.Container) {
-				if c.ImageManifest != nil && c.ImageManifest.Digest == target.Digest {
-					mfstSummary.ImageData.Containers = append(mfstSummary.ImageData.Containers, c.ID)
-					containersCount++
-				}
-			})
+		for _, c := range i.containers.List() {
+			if c.ImageManifest != nil && c.ImageManifest.Digest == target.Digest {
+				mfstSummary.ImageData.Containers = append(mfstSummary.ImageData.Containers, c.ID)
+				containersCount++
+			}
 		}
 
 		platform := mfstSummary.ImageData.Platform
@@ -377,17 +381,25 @@ func (i *ImageService) imageSummary(ctx context.Context, img images.Image, platf
 				"error": err,
 				"image": img.Name,
 			}).Warn("unexpected image target (neither a manifest nor index)")
-			return nil, nil, nil
+		} else {
+			return nil, nil, err
 		}
-		return nil, nil, err
 	}
 
 	if best == nil {
-		// TODO we should probably show *something* for images we've pulled
-		// but are 100% shallow or an empty manifest list/index
-		// ("tianon/scratch:index" is an empty example image index and
-		// "tianon/scratch:list" is an empty example manifest list)
-		return nil, nil, nil
+		target := img.Target
+		return &imagetypes.Summary{
+			ID:          target.Digest.String(),
+			RepoDigests: []string{target.Digest.String()},
+			RepoTags:    tagsByDigest[target.Digest],
+			Size:        totalSize,
+			// -1 indicates that the value has not been set (avoids ambiguity
+			// between 0 (default) and "not set". We cannot use a pointer (nil)
+			// for this, as the JSON representation uses "omitempty", which would
+			// consider both "0" and "nil" to be "empty".
+			SharedSize: -1,
+			Containers: -1,
+		}, nil, nil
 	}
 
 	image, err := i.singlePlatformImage(ctx, i.content, tagsByDigest[best.RealTarget.Digest], best)
@@ -467,7 +479,7 @@ func (i *ImageService) singlePlatformImage(ctx context.Context, contentStore con
 		return nil, err
 	}
 	var cfg configLabels
-	if err := readConfig(ctx, contentStore, cfgDesc, &cfg); err != nil {
+	if err := readJSON(ctx, contentStore, cfgDesc, &cfg); err != nil {
 		return nil, err
 	}
 
@@ -669,7 +681,7 @@ func setupLabelFilter(ctx context.Context, store content.Store, fltrs filters.Ar
 				return nil, nil
 			}
 			var cfg configLabels
-			if err := readConfig(ctx, store, desc, &cfg); err != nil {
+			if err := readJSON(ctx, store, desc, &cfg); err != nil {
 				if errdefs.IsNotFound(err) {
 					return nil, nil
 				}
@@ -744,8 +756,8 @@ func computeSharedSize(chainIDs []digest.Digest, layers map[digest.Digest]int, s
 	return sharedSize, nil
 }
 
-// readConfig reads content pointed by the descriptor and unmarshals it into a specified output.
-func readConfig(ctx context.Context, store content.Provider, desc ocispec.Descriptor, out interface{}) error {
+// readJSON reads content pointed by the descriptor and unmarshals it into a specified output.
+func readJSON(ctx context.Context, store content.Provider, desc ocispec.Descriptor, out interface{}) error {
 	data, err := content.ReadBlob(ctx, store, desc)
 	if err != nil {
 		err = errors.Wrapf(err, "failed to read config content")

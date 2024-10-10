@@ -13,6 +13,21 @@ keywords: "API, Docker, rcli, REST, documentation"
      will be rejected.
 -->
 
+## v1.48 API changes
+
+[Docker Engine API v1.48](https://docs.docker.com/engine/api/v1.48/) documentation
+
+* `GET /images/{name}/history` now supports a `platform` parameter (JSON
+  encoded OCI Platform type) that allows to specify a platform to show the
+  history of.
+* `POST /images/{name}/load` and `GET /images/{name}/get` now support a
+  `platform` parameter (JSON encoded OCI Platform type) that allows to specify
+  a platform to load/save. Not passing this parameter will result in
+  loading/saving the full multi-platform image.
+* Deprecated: The `ContainerdCommit.Expected`, `RuncCommit.Expected`, and
+  `InitCommit.Expected` fields in the `GET /info` endpoint are deprecated
+  and will be omitted in API v1.49.
+
 ## v1.47 API changes
 
 [Docker Engine API v1.47](https://docs.docker.com/engine/api/v1.47/) documentation
@@ -144,7 +159,7 @@ are not part of the underlying image's Config, and deprecated:
   interval for health checks during the start period.
 * `GET /info` now includes a `CDISpecDirs` field indicating the configured CDI
   specifications directories. The use of the applied setting requires the daemon
-  to have expermental enabled, and for non-experimental daemons an empty list is
+  to have experimental enabled, and for non-experimental daemons an empty list is
   always returned.
 * `POST /networks/create` now returns a 400 if the `IPAMConfig` has invalid
   values. Note that this change is _unversioned_ and applied to all API
@@ -430,7 +445,7 @@ are not part of the underlying image's Config, and deprecated:
   to return those without the specified labels.
 * `POST /containers/create` now accepts a `fluentd-async` option in `HostConfig.LogConfig.Config`
   when using the Fluentd logging driver. This option deprecates the `fluentd-async-connect`
-  option, which remains funtional, but will be removed in a future release. Users
+  option, which remains functional, but will be removed in a future release. Users
   are encouraged to use the `fluentd-async` option going forward. This change is
   not versioned, and affects all API versions if the daemon has this patch.
 * `POST /containers/create` now accepts a `fluentd-request-ack` option in
